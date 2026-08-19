@@ -1,0 +1,37 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Lexend:wght@400;700;800&family=Manrope:wght@400;500;600&family=Space+Grotesk:wght@400;500;700&display=swap');
+
+@theme {
+  --font-headline: "Lexend", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-label: "Space Grotesk", ui-monospace, SFMono-Regular, monospace;
+
+  --color-primary: #ff8f6f;
+  --color-primary-dim: #ff734a;
+  --color-secondary: #91f78e;
+  --color-tertiary: #44a5ff;
+  --color-surface: #0e0e0e;
+  --color-surface-container-low: #131313;
+  --color-surface-container: #1a1a1a;
+  --color-surface-container-high: #20201f;
+  --color-surface-container-highest: #262626;
+  --color-surface-bright: #2c2c2c;
+  --color-outline-variant: #484847;
+  --color-on-surface-variant: #adaaaa;
+  --color-error: #ff716c;
+}
+
+@layer base {
+  body {
+    @apply bg-surface text-white font-body;
+  }
+}
+
+.performance-gradient {
+  background: linear-gradient(135deg, #ff8f6f 0%, #ff7851 100%);
+}
+
+.blur-shell {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
