@@ -27,9 +27,14 @@ import {
   Download,
   Trash2,
   Film,
-  Sliders
+  Sliders,
+  Layers,
+  Code,
+  Box
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import RfDetrSupervisionTracker from './RfDetrSupervisionTracker';
+import { COCO_CLASSES, getSupervisionColor, type RFDetrDetection } from '../cocoClasses';
 
 interface BiomechanicsResult {
   activityDetected: string;
@@ -41,6 +46,9 @@ interface BiomechanicsResult {
 }
 
 export default function CameraMotionTracker() {
+  // Navigation Mode Tab: 'motion' (Kinetic Coach) | 'rfdetr' (RF-DETR + Supervision) | 'combined' (Both)
+  const [activeMainTab, setActiveMainTab] = useState<'motion' | 'rfdetr' | 'combined'>('motion');
+
   // Camera & Device Stream States
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -51,6 +59,20 @@ export default function CameraMotionTracker() {
   const [isCameraActive, setIsCameraActive] = useState<boolean>(true);
   const [isDemoMode, setIsDemoMode] = useState<boolean>(false); // Defaults to live camera mode
   const [isFullview, setIsFullview] = useState<boolean>(false); // Fullview expand mode for live camera feed
+
+  // RF-DETR Medium & Supervision State
+  const [rfDetections, setRfDetections] = useState<RFDetrDetection[]>([]);
+  const [rfLabels, setRfLabels] = useState<string[]>([]);
+  const [isRfOverlayEnabled, setIsRfOverlayEnabled] = useState<boolean>(true);
+  const [activePresetImageUrl, setActivePresetImageUrl] = useState<string | null>(null);
+  const presetImageRef = useRef<HTMLImageElement | null>(null);
+  const rfDetectionsRef = useRef<RFDetrDetection[]>([]);
+  const rfLabelsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    rfDetectionsRef.current = rfDetections;
+    rfLabelsRef.current = rfLabels;
+  }, [rfDetections, rfLabels]);
 
   // Toggle camera facing mode between Front ('user') and Rear ('environment')
   const toggleCameraFacingMode = () => {
@@ -1581,6 +1603,67 @@ export default function CameraMotionTracker() {
               }
             }
 
+            // Draw RFDETR Supervision Annotator (BoxAnnotator + LabelAnnotator)
+            if (isRfOverlayEnabled && rfDetectionsRef.current && rfDetectionsRef.current.length > 0) {
+              rfDetectionsRef.current.forEach((det, idx) => {
+                const color = getSupervisionColor(det.class_id);
+                let ymin = 0, xmin = 0, ymax = 0, xmax = 0;
+
+                if (det.box_2d && det.box_2d.length === 4) {
+                  [ymin, xmin, ymax, xmax] = det.box_2d;
+                } else if (det.xyxy && det.xyxy.length === 4) {
+                  [xmin, ymin, xmax, ymax] = det.xyxy;
+                }
+
+                const bx = (xmin / 1000) * width;
+                const by = (ymin / 1000) * height;
+                const bw = Math.max(12, ((xmax - xmin) / 1000) * width);
+                const bh = Math.max(12, ((ymax - ymin) / 1000) * height);
+
+                ctx.save();
+                
+                // 1. sv.BoxAnnotator
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                if (ctx.roundRect) {
+                  ctx.roundRect(bx, by, bw, bh, 4);
+                } else {
+                  ctx.strokeRect(bx, by, bw, bh);
+                }
+                ctx.stroke();
+
+                ctx.fillStyle = `${color}18`;
+                ctx.fillRect(bx, by, bw, bh);
+
+                // 2. sv.LabelAnnotator
+                const rawLabel = rfLabelsRef.current[idx] || `${COCO_CLASSES[det.class_id] || det.class_name}`;
+                const displayTag = `${rawLabel.toUpperCase()} ${(det.confidence * 100).toFixed(0)}%`;
+                
+                ctx.font = 'bold 11px monospace';
+                const textWidth = ctx.measureText(displayTag).width;
+                const pillW = textWidth + 14;
+                const pillH = 20;
+                const pillX = bx;
+                const pillY = Math.max(0, by - pillH);
+
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                if (ctx.roundRect) {
+                  ctx.roundRect(pillX, pillY, pillW, pillH, [4, 4, 0, 0]);
+                } else {
+                  ctx.fillRect(pillX, pillY, pillW, pillH);
+                }
+                ctx.fill();
+
+                ctx.fillStyle = '#FFFFFF';
+                ctx.textAlign = 'left';
+                ctx.fillText(displayTag, pillX + 6, pillY + 14);
+
+                ctx.restore();
+              });
+            }
+
             // Save current frame for the next check
             prevFrameDataRef.current = currentFrameData;
 
@@ -1723,25 +1806,53 @@ export default function CameraMotionTracker() {
     trackingStartTimeRef.current = Date.now();
   };
 
+  const getLiveFrameBase64 = (): string | null => {
+    if (displayCanvasRef.current) {
+      return displayCanvasRef.current.toDataURL('image/jpeg', 0.85);
+    }
+    return null;
+  };
+
+  const handleSelectPresetImage = (url: string) => {
+    setActivePresetImageUrl(url);
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      presetImageRef.current = img;
+      if (displayCanvasRef.current) {
+        const ctx = displayCanvasRef.current.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, displayCanvasRef.current.width, displayCanvasRef.current.height);
+        }
+      }
+    };
+    img.src = url;
+  };
+
   return (
     <div className="bg-surface-container-lowest/60 border border-outline-variant/10 rounded-3xl p-6 space-y-6 text-left shadow-xl" id="camera-motion-tracker-panel">
       
       {/* Header Info Banner */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-outline-variant/10 pb-5">
         <div className="space-y-1">
-          <span className="text-[9px] font-mono font-extrabold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded uppercase tracking-wider flex items-center gap-1.5 w-fit">
-            <Zap className="w-3 h-3 text-emerald-400 animate-pulse" /> COMPUTER VISION MODULE
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[9px] font-mono font-extrabold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded uppercase tracking-wider flex items-center gap-1.5 w-fit">
+              <Zap className="w-3 h-3 text-emerald-400 animate-pulse" /> COMPUTER VISION & TRANSFORMER AI
+            </span>
+            <span className="text-[9px] font-mono font-bold text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded uppercase tracking-wider flex items-center gap-1">
+              <Layers className="w-3 h-3" /> RFDETRMedium + supervision
+            </span>
+          </div>
           <h2 className="text-2xl font-headline font-extrabold text-white tracking-tight flex items-center gap-2">
-            <Camera className="w-6 h-6 text-primary" /> Live Motion Analysis & Captioning
+            <Camera className="w-6 h-6 text-primary" /> Live Motion Analysis & Supervision Tracking
           </h2>
-          <p className="text-xs text-on-surface-variant max-w-xl">
-            Detect movement cycles and capture body postures in real time. Grab a camera snapshot to obtain pro-level, AI-generated posture alignment captions and correcting tips.
+          <p className="text-xs text-on-surface-variant max-w-2xl">
+            Real-time transformer detection powered by <strong className="text-purple-300">RFDETRMedium</strong> and <strong className="text-emerald-300">supervision (sv)</strong> BoxAnnotator & LabelAnnotator alongside kinetic motion tracking and AI coaching captions.
           </p>
         </div>
 
         {/* Top Toggles */}
-        <div className="flex items-center gap-2 bg-surface-container/60 p-1.5 rounded-2xl border border-outline-variant/10 shadow-inner">
+        <div className="flex flex-wrap items-center gap-2 bg-surface-container/60 p-1.5 rounded-2xl border border-outline-variant/10 shadow-inner">
           <button
             onClick={() => {
               setIsDemoMode(false);
@@ -1783,6 +1894,61 @@ export default function CameraMotionTracker() {
             }`}
           >
             <Activity className="w-3.5 h-3.5" /> DEMO SKELETON
+          </button>
+        </div>
+      </div>
+
+      {/* Main Mode Navigation Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-surface-container/40 p-2 rounded-2xl border border-outline-variant/10">
+        <div className="flex items-center gap-1.5">
+          <button
+            id="tab-mode-motion"
+            onClick={() => setActiveMainTab('motion')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-mono font-bold flex items-center gap-1.5 transition ${
+              activeMainTab === 'motion'
+                ? 'bg-primary text-black font-extrabold shadow-md'
+                : 'bg-zinc-900/60 hover:bg-zinc-900 text-on-surface-variant hover:text-white'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5" /> Kinetic & Biomechanics Coach
+          </button>
+          <button
+            id="tab-mode-rfdetr"
+            onClick={() => setActiveMainTab('rfdetr')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-mono font-bold flex items-center gap-1.5 transition ${
+              activeMainTab === 'rfdetr'
+                ? 'bg-purple-600 text-white font-extrabold shadow-lg shadow-purple-600/30'
+                : 'bg-zinc-900/60 hover:bg-zinc-900 text-purple-300 hover:text-white'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5 text-purple-400" /> RF-DETR + Supervision Engine
+          </button>
+          <button
+            id="tab-mode-combined"
+            onClick={() => setActiveMainTab('combined')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-mono font-bold flex items-center gap-1.5 transition ${
+              activeMainTab === 'combined'
+                ? 'bg-emerald-500 text-black font-extrabold shadow-md'
+                : 'bg-zinc-900/60 hover:bg-zinc-900 text-on-surface-variant hover:text-white'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" /> Combined Vision Dashboard
+          </button>
+        </div>
+
+        {/* Supervision Overlay Toggle Pill */}
+        <div className="flex items-center gap-2 bg-zinc-950/80 px-3 py-1.5 rounded-xl border border-white/10 text-xs font-mono">
+          <span className="text-on-surface-variant">Supervision Overlay:</span>
+          <button
+            id="btn-toggle-rf-overlay"
+            onClick={() => setIsRfOverlayEnabled(!isRfOverlayEnabled)}
+            className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition ${
+              isRfOverlayEnabled
+                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                : 'bg-zinc-800 text-on-surface-variant'
+            }`}
+          >
+            {isRfOverlayEnabled ? 'ENABLED' : 'MUTED'}
           </button>
         </div>
       </div>
@@ -2949,6 +3115,24 @@ export default function CameraMotionTracker() {
         </div>
 
       </div>
+
+      {/* RF-DETR Medium + Supervision Dedicated Panel */}
+      {(activeMainTab === 'rfdetr' || activeMainTab === 'combined') && (
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2 }}
+        >
+          <RfDetrSupervisionTracker
+            onApplyDetectionsToCanvas={(dets, lbls) => {
+              setRfDetections(dets);
+              setRfLabels(lbls);
+            }}
+            getLiveFrameBase64={getLiveFrameBase64}
+            onSelectPresetImage={handleSelectPresetImage}
+          />
+        </motion.div>
+      )}
 
     </div>
   );
